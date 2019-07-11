@@ -2,6 +2,8 @@
 set -e -x
 
 gateway_address="http://ros.rancher.io/gateway"
+max_retry=5
+current=1
 
 _sigProcess() {
     echo "SIGINT/SIGTERM signal..."
@@ -12,7 +14,7 @@ trap _sigProcess SIGINT SIGKILL SIGTERM
 
 __read_policy() {
     policy=`ros c get rancher.upgrade.policy`
-    if [ -z $policy ]; then
+    if [[ -z ${policy} ]]; then
         echo "can not read upgrade.policy"
         exit 1
     fi
@@ -24,25 +26,33 @@ __report_activity() {
     uuid=`cat /sys/class/dmi/id/product_uuid || true`
     release=`ros -v | awk '{print $2}'`
     response=`wget --server-response ${gateway_address}/report --header 'Accept: application/json' --header 'Content-type: application/json' --header "arch: $arch" --header "uuid: $uuid" --header "release: $release" 2>&1 | awk '/^  HTTP/{print $2}'`
-    if [ $response -ge 200 -a $response -le 300 ]; then
+    if [[ ${response} -ge 200 -a ${response} -le 300 ]]; then
         echo "report activity success"
     else
-        echo "report activity failed"
+        if [[ ${current} -lt ${max_retry} ]];
+        then
+            echo "report activity failed, will retry after 1 seconds"
+            sleep 1
+            current=${current}+1
+            __report_activity
+        else
+            echo "report activity failed"
+        fi
     fi
 }
 
 __upgrade_operate() {
     recommend_version=`wget ${gateway_address}/version -q -O -`
-    case $policy in
+    case ${policy} in
         download)
             echo "upgrade.policy is 'download'"
             __report_activity
-            system-docker pull $recommend_version
+            system-docker pull ${recommend_version}
         ;;
         auto)
             echo "upgrade.policy is 'auto'"
             __report_activity
-            ros os upgrade -i $recommend_version -f
+            ros os upgrade -i ${recommend_version} -f
         ;;
         none)
             echo "upgrade.policy is 'none'"
